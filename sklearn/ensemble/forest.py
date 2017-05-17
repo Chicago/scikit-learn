@@ -158,11 +158,14 @@ def _parallel_build_trees(tree, forest, X, y, sample_weight, tree_idx, n_trees,
         else:
             curr_sample_weight = sample_weight.copy()
 
-        if balance_data is None:
-            indices = _generate_sample_indices(tree.random_state, n_samples)
-        else:
+        if class_weight == 'balanced_bootstrap':
+            if balance_data is None:
+                raise ValueError("_parallel_build_trees called with class_weight "
+                                 "'balanced_bootstrap' but no balance_data")
             indices = _generate_balanced_sample_indices(tree.random_state,
                                                         balance_data)
+        else:
+            indices = _generate_sample_indices(tree.random_state, n_samples)
 
         sample_counts = bincount(indices, minlength=n_samples)
         curr_sample_weight *= sample_counts
@@ -200,8 +203,7 @@ class BaseForest(six.with_metaclass(ABCMeta, BaseEnsemble)):
                  random_state=None,
                  verbose=0,
                  warm_start=False,
-                 class_weight=None,
-                 balanced=False):
+                 class_weight=None):
         super(BaseForest, self).__init__(
             base_estimator=base_estimator,
             n_estimators=n_estimators,
@@ -214,7 +216,6 @@ class BaseForest(six.with_metaclass(ABCMeta, BaseEnsemble)):
         self.verbose = verbose
         self.warm_start = warm_start
         self.class_weight = class_weight
-        self.balanced = balanced
 
     def apply(self, X):
         """Apply trees in the forest to X, return leaf indices.
@@ -376,7 +377,7 @@ class BaseForest(six.with_metaclass(ABCMeta, BaseEnsemble)):
                 trees.append(tree)
 
             balance_data = _get_class_balance_data(y)\
-                if self.balanced else None
+                if self.class_weight == 'balanced_bootstrap' else None
 
             # Parallel loop: we use the threading backend as the Cython code
             # for fitting the trees is internally releasing the Python GIL
@@ -470,8 +471,7 @@ class ForestClassifier(six.with_metaclass(ABCMeta, BaseForest,
                  random_state=None,
                  verbose=0,
                  warm_start=False,
-                 class_weight=None,
-                 balanced=False):
+                 class_weight=None):
 
         super(ForestClassifier, self).__init__(
             base_estimator,
@@ -483,8 +483,7 @@ class ForestClassifier(six.with_metaclass(ABCMeta, BaseForest,
             random_state=random_state,
             verbose=verbose,
             warm_start=warm_start,
-            class_weight=class_weight,
-            balanced=balanced)
+            class_weight=class_weight)
 
     def _set_oob_score(self, X, y):
         """Compute out-of-bag score"""
@@ -534,10 +533,17 @@ class ForestClassifier(six.with_metaclass(ABCMeta, BaseForest,
     def _validate_y_class_weight(self, y):
         check_classification_targets(y)
 
+        # use this local class_weight to easily handle
+        # class_weight="balanced_bootstrap" identically to class_weight=None
+        class_weight = self.class_weight
+        if self.class_weight == 'balanced_bootstrap':
+            class_weight = None
+
+
         y = np.copy(y)
         expanded_class_weight = None
 
-        if self.class_weight is not None:
+        if class_weight is not None:
             y_original = np.copy(y)
 
         self.classes_ = []
@@ -551,17 +557,19 @@ class ForestClassifier(six.with_metaclass(ABCMeta, BaseForest,
             self.n_classes_.append(classes_k.shape[0])
         y = y_store_unique_indices
 
-        if self.class_weight is not None:
-            valid_presets = ('balanced', 'balanced_subsample')
-            if isinstance(self.class_weight, six.string_types):
-                if self.class_weight not in valid_presets:
+        if class_weight is not None:
+            valid_presets = ('balanced', 'balanced_subsample', 
+                             'balanced_bootstrap')
+            if isinstance(class_weight, six.string_types):
+                if class_weight not in valid_presets:
                     raise ValueError('Valid presets for class_weight include '
-                                     '"balanced" and "balanced_subsample". '
+                                     '"balanced", "balanced_subsample", '
+                                     'and "balanced_bootstrap". '
                                      'Given "%s".'
-                                     % self.class_weight)
+                                     % class_weight)
                 if self.warm_start:
-                    warn('class_weight presets "balanced" or '
-                         '"balanced_subsample" are '
+                    warn('class_weight presets "balanced", '
+                         '"balanced_subsample", or "balanced_bootstrap" are '
                          'not recommended for warm_start if the fitted data '
                          'differs from the full dataset. In order to use '
                          '"balanced" weights, use compute_class_weight('
@@ -571,12 +579,12 @@ class ForestClassifier(six.with_metaclass(ABCMeta, BaseForest,
                          'distributions. Pass the resulting weights as the '
                          'class_weight parameter.')
 
-            if (self.class_weight != 'balanced_subsample' or
+            if (class_weight != 'balanced_subsample' or
                     not self.bootstrap):
-                if self.class_weight == "balanced_subsample":
+                if class_weight == "balanced_subsample":
                     class_weight = "balanced"
                 else:
-                    class_weight = self.class_weight
+                    class_weight = class_weight
                 expanded_class_weight = compute_sample_weight(class_weight,
                                                               y_original)
 
@@ -1017,8 +1025,7 @@ class RandomForestClassifier(ForestClassifier):
                  random_state=None,
                  verbose=0,
                  warm_start=False,
-                 class_weight=None,
-                 balanced=False):
+                 class_weight=None):
         super(RandomForestClassifier, self).__init__(
             base_estimator=DecisionTreeClassifier(),
             n_estimators=n_estimators,
@@ -1033,8 +1040,7 @@ class RandomForestClassifier(ForestClassifier):
             random_state=random_state,
             verbose=verbose,
             warm_start=warm_start,
-            class_weight=class_weight,
-            balanced=balanced)
+            class_weight=class_weight)
 
         self.criterion = criterion
         self.max_depth = max_depth
